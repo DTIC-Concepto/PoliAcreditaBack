@@ -7,6 +7,10 @@ import {
   HttpStatus,
   Get,
   Query,
+  Patch,
+  Delete,
+  Param,
+  ParseIntPipe,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -19,12 +23,14 @@ import {
   ApiInternalServerErrorResponse,
   ApiUnauthorizedResponse,
   ApiBody,
+  ApiParam,
 } from '@nestjs/swagger';
 import { ResultadosAprendizajeService } from './resultados-aprendizaje.service';
 import { CreateResultadoAprendizajeDto } from './dto/create-resultado-aprendizaje.dto';
 import { ResultadoAprendizajeResponseDto } from './dto/resultado-aprendizaje-response.dto';
 import { FilterResultadoAprendizajeDto } from './dto/filter-resultado-aprendizaje.dto';
 import { ResultadoAprendizajePaginatedResponseDto } from './dto/resultado-aprendizaje-paginated-response.dto';
+import { UpdateResultadoAprendizajeDto } from './dto/update-resultado-aprendizaje.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -244,5 +250,82 @@ export class ResultadosAprendizajeController {
       hasPrevious: result.hasPrevious,
       hasNext: result.hasNext,
     };
+  }
+
+  @Patch(':id')
+  @Roles(RolEnum.COORDINADOR, RolEnum.CEI)
+  @ApiOperation({
+    summary: 'Actualizar Resultado de Aprendizaje',
+    description: 'Actualiza los datos de un Resultado de Aprendizaje existente.',
+  })
+  @ApiParam({
+    name: 'id',
+    type: 'number',
+    description: 'ID del Resultado de Aprendizaje a actualizar',
+    example: 1,
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Resultado de Aprendizaje actualizado exitosamente',
+    type: ResultadoAprendizajeResponseDto,
+  })
+  @ApiBadRequestResponse({
+    description: 'Datos de entrada inválidos',
+  })
+  @ApiNotFoundResponse({
+    description: 'Resultado de Aprendizaje no encontrado',
+  })
+  @ApiConflictResponse({
+    description: 'Código duplicado para el mismo tipo y carrera',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'No autorizado - Token JWT inválido o rol insuficiente',
+  })
+  async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateRaDto: UpdateResultadoAprendizajeDto,
+    @GetUser() user: UsuarioModel,
+  ): Promise<ResultadoAprendizajeResponseDto> {
+    const ra = await this.resultadosAprendizajeService.update(id, updateRaDto, user.id);
+
+    return {
+      id: ra.id,
+      codigo: ra.codigo,
+      descripcion: ra.descripcion,
+      tipo: ra.tipo,
+      carreraId: ra.carreraId,
+      createdAt: ra.createdAt,
+      updatedAt: ra.updatedAt,
+    };
+  }
+
+  @Delete(':id')
+  @Roles(RolEnum.COORDINADOR, RolEnum.CEI)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Eliminar Resultado de Aprendizaje',
+    description: 'Elimina un Resultado de Aprendizaje del sistema.',
+  })
+  @ApiParam({
+    name: 'id',
+    type: 'number',
+    description: 'ID del Resultado de Aprendizaje a eliminar',
+    example: 1,
+  })
+  @ApiResponse({
+    status: HttpStatus.NO_CONTENT,
+    description: 'Resultado de Aprendizaje eliminado exitosamente',
+  })
+  @ApiNotFoundResponse({
+    description: 'Resultado de Aprendizaje no encontrado',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'No autorizado - Token JWT inválido o rol insuficiente',
+  })
+  async remove(
+    @Param('id', ParseIntPipe) id: number,
+    @GetUser() user: UsuarioModel,
+  ): Promise<void> {
+    return this.resultadosAprendizajeService.remove(id, user.id);
   }
 }

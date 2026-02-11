@@ -4,8 +4,10 @@ import { Op } from 'sequelize';
 import { ResultadoAprendizajeModel } from './models/resultado-aprendizaje.model';
 import { CarreraModel } from '../carreras/models/carrera.model';
 import { CreateResultadoAprendizajeDto } from './dto/create-resultado-aprendizaje.dto';
+import { UpdateResultadoAprendizajeDto } from './dto/update-resultado-aprendizaje.dto';
 import { FilterResultadoAprendizajeDto } from './dto/filter-resultado-aprendizaje.dto';
 import { AuditoriaService } from '../auditoria/auditoria.service';
+import { EventoTipoEnum } from '../auditoria/enums/evento-tipo.enum';
 
 @Injectable()
 export class ResultadosAprendizajeService {
@@ -61,7 +63,7 @@ export class ResultadosAprendizajeService {
       if (usuarioId) {
         await this.auditoriaService.registrarEvento({
           usuarioId,
-          tipoEvento: 'RESULTADO_APRENDIZAJE_CREADO' as any,
+          tipoEvento: EventoTipoEnum.RESULTADO_APRENDIZAJE_CREADO,
           descripcion: `Se creó el Resultado de Aprendizaje "${newRa.codigo}" de tipo "${newRa.tipo}" para la carrera ${carrera.nombre}`,
           entidad: 'resultados_aprendizaje',
           entidadId: newRa.id,
@@ -201,6 +203,118 @@ export class ResultadosAprendizajeService {
       ],
       order: [['tipo', 'ASC'], ['codigo', 'ASC']],
     });
+  }
+
+  async update(
+    id: number,
+    updateRaDto: UpdateResultadoAprendizajeDto,
+    usuarioId?: number,
+  ): Promise<ResultadoAprendizajeModel> {
+    try {
+      const ra = await this.resultadoAprendizajeModel.findByPk(id);
+
+      if (!ra) {
+        throw new NotFoundException('Resultado de Aprendizaje no encontrado');
+      }
+
+      const nextCodigo = updateRaDto.codigo ?? ra.codigo;
+      const nextTipo = updateRaDto.tipo ?? ra.tipo;
+      const nextCarreraId = updateRaDto.carreraId ?? ra.carreraId;
+
+      if (updateRaDto.carreraId && updateRaDto.carreraId !== ra.carreraId) {
+        const carrera = await this.carreraModel.findByPk(updateRaDto.carreraId);
+        if (!carrera) {
+          throw new NotFoundException('La carrera especificada no existe');
+        }
+      }
+
+      if (
+        nextCodigo !== ra.codigo ||
+        nextTipo !== ra.tipo ||
+        nextCarreraId !== ra.carreraId
+      ) {
+        const existingRa = await this.resultadoAprendizajeModel.findOne({
+          where: {
+            codigo: nextCodigo,
+            tipo: nextTipo,
+            carreraId: nextCarreraId,
+            id: { [Op.ne]: id },
+          },
+        });
+
+        if (existingRa) {
+          throw new ConflictException(
+            `Ya existe un Resultado de Aprendizaje con el código "${nextCodigo}" de tipo "${nextTipo}" para esta carrera`,
+          );
+        }
+      }
+
+      await ra.update(updateRaDto as any);
+
+      if (usuarioId) {
+        const carrera = await this.carreraModel.findByPk(ra.carreraId);
+        await this.auditoriaService.registrarEvento({
+          usuarioId,
+          tipoEvento: EventoTipoEnum.RESULTADO_APRENDIZAJE_ACTUALIZADO,
+          descripcion: `Se actualizó el Resultado de Aprendizaje "${ra.codigo}" de tipo "${ra.tipo}" para la carrera ${carrera?.nombre ?? ra.carreraId}`,
+          entidad: 'resultados_aprendizaje',
+          entidadId: ra.id,
+          metadatos: {
+            codigo: ra.codigo,
+            tipo: ra.tipo,
+            carreraId: ra.carreraId,
+            carreraNombre: carrera?.nombre,
+          },
+        });
+      }
+
+      return ra;
+    } catch (error) {
+      if (error instanceof ConflictException || error instanceof NotFoundException) {
+        throw error;
+      }
+
+      throw new InternalServerErrorException(
+        'Error interno del servidor al actualizar el Resultado de Aprendizaje',
+      );
+    }
+  }
+
+  async remove(id: number, usuarioId?: number): Promise<void> {
+    try {
+      const ra = await this.resultadoAprendizajeModel.findByPk(id);
+
+      if (!ra) {
+        throw new NotFoundException('Resultado de Aprendizaje no encontrado');
+      }
+
+      await ra.destroy();
+
+      if (usuarioId) {
+        const carrera = await this.carreraModel.findByPk(ra.carreraId);
+        await this.auditoriaService.registrarEvento({
+          usuarioId,
+          tipoEvento: EventoTipoEnum.RESULTADO_APRENDIZAJE_ELIMINADO,
+          descripcion: `Se eliminó el Resultado de Aprendizaje "${ra.codigo}" de tipo "${ra.tipo}" para la carrera ${carrera?.nombre ?? ra.carreraId}`,
+          entidad: 'resultados_aprendizaje',
+          entidadId: ra.id,
+          metadatos: {
+            codigo: ra.codigo,
+            tipo: ra.tipo,
+            carreraId: ra.carreraId,
+            carreraNombre: carrera?.nombre,
+          },
+        });
+      }
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+
+      throw new InternalServerErrorException(
+        'Error interno del servidor al eliminar el Resultado de Aprendizaje',
+      );
+    }
   }
 
   /**
