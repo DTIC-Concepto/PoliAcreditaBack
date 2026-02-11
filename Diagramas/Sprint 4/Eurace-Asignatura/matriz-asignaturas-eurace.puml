@@ -1,0 +1,200 @@
+@startuml Matriz Asignaturas EUR-ACE
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title Secuencia: Obtener Matriz Asignaturas vs EUR-ACE
+
+actor "Usuario\n(Frontend)" as Frontend
+participant "API Gateway\n/reportes" as API
+participant "ReportesController" as Controller
+participant "JwtAuthGuard\nRolesGuard" as Guard
+participant "ReportesService" as Service
+database "PostgreSQL\nDatabase" as DB
+
+== Autenticación y Autorización ==
+Frontend -> API: GET /reportes/matriz-asignaturas-eurace/:carreraId\n?nivelesAporte[]=Alto&search=MATD
+note right
+  **Headers:**
+  Authorization: Bearer <JWT_TOKEN>
+  
+  **Path Params:**
+  - carreraId: number (ID de la carrera)
+  
+  **Query Params (opcionales):**
+  - nivelesAporte: string[] (Alto, Medio, Bajo)
+  - search: string (búsqueda por código o nombre)
+end note
+
+API -> Controller: getMatrizAsignaturasEurace(carreraId, query)
+Controller -> Guard: Validar JWT y Roles
+note right
+  **Roles Autorizados:**
+  - CEI
+  - COORDINADOR
+  - DECANO
+  - SUBDECANO
+  - JEFE_DEPARTAMENTO
+  - ADMINISTRADOR
+end note
+
+alt Token inválido o sin permisos
+  Guard --> Controller: 401 Unauthorized / 403 Forbidden
+  Controller --> API: Error Response
+  API --> Frontend: 401 / 403
+else Token válido y rol autorizado
+  Guard --> Controller: Acceso permitido
+  
+  == Procesamiento de Datos ==
+  Controller -> Service: getMatrizAsignaturasEurace(\n  carreraId,\n  nivelesAporte?,\n  search?\n)
+  
+  Service -> DB: 1. Validar carrera existe
+  note right
+    SELECT * FROM carreras
+    WHERE id = :carreraId
+    AND estadoActivo = true
+  end note
+  DB --> Service: Carrera encontrada
+  
+  alt Carrera no encontrada
+    Service --> Controller: NotFoundException
+    Controller --> API: 404 Not Found
+    API --> Frontend: Error: Carrera no encontrada
+  end
+  
+  Service -> DB: 2. Obtener asignaturas de la carrera
+  note right
+    SELECT ca.*, a.*
+    FROM carrera_asignatura ca
+    INNER JOIN asignaturas a ON ca.asignaturaId = a.id
+    WHERE ca.carreraId = :carreraId
+    AND a.estadoActivo = true
+  end note
+  DB --> Service: Lista de CarreraAsignaturas
+  
+  Service -> Service: 3. Aplicar filtro de búsqueda (search)
+  note right
+    Si search existe:
+    - Filtrar asignaturas donde
+      codigo ILIKE '%search%' OR
+      nombre ILIKE '%search%'
+  end note
+  
+  Service -> DB: 4. Obtener todos los criterios EUR-ACE activos
+  note right
+    SELECT *
+    FROM eur_ace
+    WHERE estadoActivo = true
+    ORDER BY codigo ASC
+  end note
+  DB --> Service: Lista de criterios EUR-ACE
+  
+  Service -> DB: 5. Obtener RAAs de las asignaturas
+  note right
+    SELECT *
+    FROM raa
+    WHERE carreraAsignaturaId IN (:carreraAsignaturaIds)
+    AND estadoActivo = true
+  end note
+  DB --> Service: Lista de RAAs
+  
+  Service -> DB: 6. Obtener relaciones RAA → RA con nivel de aporte
+  note right
+    SELECT rr.*, ra.*
+    FROM raa_ra rr
+    INNER JOIN resultados_aprendizaje ra
+      ON rr.resultadoAprendizajeId = ra.id
+    WHERE rr.raaId IN (:raaIds)
+    AND rr.estadoActivo = true
+    [AND rr.nivelAporte IN (:nivelesAporte)]
+    -- Filtro opcional por niveles
+  end note
+  DB --> Service: Lista de RaaRa con RAs
+  
+  Service -> DB: 7. Obtener relaciones RA → EUR-ACE
+  note right
+    SELECT re.*, ea.*
+    FROM ra_eurace re
+    INNER JOIN eur_ace ea
+      ON re.eurAceId = ea.id
+    WHERE re.resultadoAprendizajeId IN (:raIds)
+    AND re.estadoActivo = true
+  end note
+  DB --> Service: Lista de RaEurace con EUR-ACE
+  
+  Service -> Service: 8. Construir matriz de relaciones
+  note right
+    Para cada asignatura (filtrada):
+      Para cada criterio EUR-ACE:
+        - Determinar si existe relación
+        - Recopilar niveles de aporte
+        - Contar RAAs involucrados
+    
+    Crear mappings solo para asignaturas
+    que pasaron el filtro de búsqueda
+  end note
+  
+  Service -> Service: 9. Calcular estadísticas
+  note right
+    - Total de asignaturas (filtradas)
+    - Total de criterios EUR-ACE
+    - Total de relaciones (mappings)
+    - Porcentaje de cobertura:
+      (totalMappings / (asignaturas * eurAce)) * 100
+  end note
+  
+  Service --> Controller: MatrizAsignaturasEuraceResponseDto
+  note right
+    **Estructura de Respuesta:**
+    {
+      asignaturas: [{
+        id, code, name, description, active
+      }],
+      eurAceCriteria: [{
+        id, code, name, description, active
+      }],
+      mappings: [{
+        asignaturaId,
+        eurAceId,
+        hasMapping: boolean,
+        nivelesAporte: string[],
+        cantidadRAAs: number
+      }],
+      programId: number,
+      programName: string,
+      stats: {
+        totalAsignaturas,
+        totalEurAce,
+        totalMappings,
+        coveragePercentage
+      }
+    }
+  end note
+  
+  Controller --> API: 200 OK con matriz
+  API --> Frontend: Respuesta JSON
+end
+
+== Uso en Frontend ==
+Frontend -> Frontend: Renderizar matriz
+note right
+  **Visualización sugerida:**
+  
+  1. Tabla con asignaturas en filas
+     y EUR-ACE en columnas
+  
+  2. Cada celda muestra:
+     - Badge si hasMapping = true
+     - Niveles de aporte (colores)
+     - Cantidad de RAAs
+  
+  3. Filtros disponibles:
+     - Búsqueda de asignaturas
+     - Filtro por niveles de aporte
+  
+  4. Mostrar estadísticas arriba:
+     - Total asignaturas/criterios
+     - % Cobertura
+end note
+
+@enduml

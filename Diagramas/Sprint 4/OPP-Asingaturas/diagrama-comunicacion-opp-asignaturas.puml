@@ -1,0 +1,152 @@
+@startuml OPP RA Asignaturas - Diagrama de Comunicación
+!theme plain
+
+title Diagrama de Comunicación: GET /reportes/opp-ra-asignaturas/:carreraId
+
+actor "Usuario\n(Frontend)" as Usuario
+participant "Controller\nReportesController" as Controller
+participant "Service\nReportesService" as Service
+participant "Auth\nGuards" as Auth
+database "Database\nPostgreSQL" as DB
+
+== 1. Request ==
+Usuario -> Controller: GET /reportes/opp-ra-asignaturas/8\n?nivelesAporte[]=Alto
+note right of Usuario
+  Query Params:
+  - nivelesAporte: ['Alto', 'Medio', 'Bajo']
+  
+  Headers:
+  - Authorization: Bearer <token>
+end note
+
+== 2. Autenticación ==
+Controller -> Auth: Validar JWT y Roles
+Auth --> Controller: Token válido ✓
+
+== 3. Validación de Carrera ==
+Controller -> Service: getOppRaAsignaturas(8, ['Alto'])
+Service -> DB: SELECT * FROM carreras WHERE id = 8
+DB --> Service: Carrera encontrada
+
+== 4. Obtener OPPs ==
+Service -> DB: SELECT * FROM opp\nWHERE carreraId = 8\nORDER BY codigo
+DB --> Service: [OPP1, OPP2, OPP3, OPP4, OPP5]
+note right of DB
+  Resultado:
+  - OPP-SW-01
+  - OPP-SW-02
+  - OPP-SW-03
+  - OPP-SW-04
+  - OPP-SW-05
+end note
+
+== 5. Obtener Relaciones OPP → RA ==
+Service -> DB: SELECT ro.*, ra.*\nFROM ra_opp ro\nINNER JOIN resultados_aprendizaje ra\n  ON ro.resultadoAprendizajeId = ra.id\nWHERE ro.oppId IN (24,22,23,26,25)\n  AND ro.estadoActivo = true
+DB --> Service: [RaOpp1, RaOpp2] con RAs incluidos
+note right of DB
+  Resultado:
+  - OPP 24 → RA 40 (RE2)
+  - OPP 22 → RA 41 (RE3)
+end note
+
+== 6. Obtener Relaciones RA → RAA ==
+Service -> DB: SELECT * FROM raa_ra\nWHERE resultadoAprendizajeId IN (40,41)\n  AND estadoActivo = true\n  AND nivelAporte IN ('Alto')
+DB --> Service: [RaaRa1, RaaRa2, RaaRa3]
+note right of DB
+  Resultado:
+  - RA 41 → RAA 5 (Alto)
+  - RA 41 → RAA 6 (Alto)
+  - RA 40 → RAA 7 (Alto)
+end note
+
+== 7. Obtener RAAs ==
+Service -> DB: SELECT r.*, ca.*\nFROM raa r\nINNER JOIN carrera_asignatura ca\n  ON r.carreraAsignaturaId = ca.id\nWHERE r.id IN (5,6,7)\n  AND ca.carreraId = 8
+DB --> Service: [RAA1, RAA2, RAA3] con carreraAsignaturas
+note right of DB
+  Resultado:
+  - RAA 5 → CarreraAsignatura 6
+  - RAA 6 → CarreraAsignatura 6
+  - RAA 7 → CarreraAsignatura 6
+end note
+
+== 8. Obtener CarreraAsignaturas ==
+Service -> DB: SELECT * FROM carrera_asignatura\nWHERE id IN (6)
+DB --> Service: [CarreraAsignatura 6]
+note right of DB
+  Resultado:
+  - id: 6
+  - carreraId: 8
+  - asignaturaId: 6
+end note
+
+== 9. Obtener Asignaturas ==
+Service -> DB: SELECT * FROM asignaturas\nWHERE id IN (6)
+DB --> Service: [Asignatura 6]
+note right of DB
+  Resultado:
+  - id: 6
+  - codigo: IS-402
+  - nombre: Inteligencia Artificial
+end note
+
+== 10. Construcción de Mapas ==
+Service -> Service: Construir mapas de relaciones
+note right of Service
+  Mapas creados:
+  1. oppToRaMap: OPP → Set<RA>
+  2. raMap: RA ID → RA
+  3. asignaturaMap: Asig ID → Asig
+  4. carreraAsigToAsigIdMap
+  5. raaToCarreraAsigMap
+  6. raToAsignaturasMap: RA → Asignaturas
+end note
+
+== 11. Construcción de Respuesta ==
+Service -> Service: Agrupar datos por OPP
+note right of Service
+  Para cada OPP:
+    Obtener RAs relacionados
+    Para cada RA:
+      Obtener asignaturas con nivel de aporte
+    Construir estructura final
+end note
+
+Service --> Controller: OppRaAsignaturasResponseDto
+note right of Service
+  Estructura:
+  {
+    carreraId: 8,
+    carreraNombre: "Software",
+    opps: [
+      {
+        opp: {
+          id: 24,
+          codigo: "OPP-SW-01",
+          descripcion: "..."
+        },
+        resultadosAprendizaje: [
+          {
+            ra: {
+              id: 40,
+              codigo: "RE2",
+              descripcion: "..."
+            },
+            asignaturas: [
+              {
+                id: 6,
+                codigo: "IS-402",
+                nombre: "Inteligencia Artificial",
+                nivelAporte: "Alto"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+end note
+
+== 12. Response ==
+Controller --> Usuario: 200 OK + JSON Response
+
+@enduml

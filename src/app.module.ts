@@ -18,6 +18,7 @@ import { EurAceModule } from './eur-ace/eur-ace.module';
 import { OppModule } from './opp/opp.module';
 import { ResultadosAprendizajeModule } from './resultados-aprendizaje/resultados-aprendizaje.module';
 import { MappingsModule } from './mappings/mappings.module';
+import { ReportesModule } from './reportes/reportes.module';
 
 // Modelos
 import { UsuarioModel } from './usuarios/models/usuario.model';
@@ -71,6 +72,7 @@ import { RaaRaModel } from './mappings/models/raa-ra.model';
     OppModule,
     ResultadosAprendizajeModule,
     MappingsModule,
+    ReportesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

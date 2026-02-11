@@ -1,0 +1,332 @@
+@startuml OPP RA Asignaturas
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title Secuencia: Obtener Relación OPP → RA → Asignaturas
+
+actor "Usuario\n(Frontend)" as Frontend
+participant "API Gateway\n/reportes" as API
+participant "ReportesController" as Controller
+participant "JwtAuthGuard\nRolesGuard" as Guard
+participant "ReportesService" as Service
+database "PostgreSQL\nDatabase" as DB
+
+== Autenticación y Autorización ==
+Frontend -> API: GET /reportes/opp-ra-asignaturas/:carreraId\n?nivelesAporte[]=Alto&nivelesAporte[]=Medio
+note right
+  **Headers:**
+  Authorization: Bearer <JWT_TOKEN>
+  
+  **Path Params:**
+  - carreraId: number (ID de la carrera)
+  
+  **Query Params (opcionales):**
+  - nivelesAporte: string[] (Alto, Medio, Bajo)
+end note
+
+API -> Controller: getOppRaAsignaturas(carreraId, query)
+Controller -> Guard: Validar JWT y Roles
+note right
+  **Roles Autorizados:**
+  - CEI
+  - COORDINADOR
+  - DECANO
+  - SUBDECANO
+  - JEFE_DEPARTAMENTO
+  - ADMINISTRADOR
+end note
+
+alt Token inválido o sin permisos
+  Guard --> Controller: 401 Unauthorized / 403 Forbidden
+  Controller --> API: Error Response
+  API --> Frontend: 401 / 403
+else Token válido y rol autorizado
+  Guard --> Controller: Acceso permitido
+  
+  == Procesamiento de Datos ==
+  Controller -> Service: getOppRaAsignaturas(\n  carreraId,\n  nivelesAporte?\n)
+  
+  Service -> DB: 1. Validar carrera existe
+  note right
+    SELECT * FROM carreras
+    WHERE id = :carreraId
+  end note
+  DB --> Service: Carrera encontrada
+  
+  alt Carrera no encontrada
+    Service --> Controller: NotFoundException
+    Controller --> API: 404 Not Found
+    API --> Frontend: Error: Carrera no encontrada
+  end
+  
+  Service -> DB: 2. Obtener OPPs de la carrera
+  note right
+    SELECT *
+    FROM opp
+    WHERE carreraId = :carreraId
+    ORDER BY codigo ASC
+  end note
+  DB --> Service: Lista de OPPs
+  
+  alt Sin OPPs
+    Service --> Controller: Respuesta vacía
+    note right
+      {
+        carreraId,
+        carreraNombre,
+        opps: []
+      }
+    end note
+    Controller --> API: 200 OK (vacío)
+    API --> Frontend: Sin OPPs
+  end
+  
+  Service -> DB: 3. Obtener relaciones OPP → RA
+  note right
+    SELECT ro.*, ra.*
+    FROM ra_opp ro
+    INNER JOIN resultados_aprendizaje ra
+      ON ro.resultadoAprendizajeId = ra.id
+    WHERE ro.oppId IN (:oppIds)
+    AND ro.estadoActivo = true
+  end note
+  DB --> Service: Lista de RaOpp con RAs incluidos
+  
+  alt Sin relaciones OPP-RA
+    Service --> Controller: OPPs sin RAs
+    note right
+      {
+        carreraId,
+        carreraNombre,
+        opps: [{
+          opp: {...},
+          resultadosAprendizaje: []
+        }]
+      }
+    end note
+    Controller --> API: 200 OK
+    API --> Frontend: OPPs sin relaciones
+  end
+  
+  Service -> DB: 4. Obtener relaciones RA → RAA → Asignatura
+  note right
+    SELECT rr.*, r.*, ca.*, a.*
+    FROM raa_ra rr
+    INNER JOIN raa r ON rr.raaId = r.id
+    INNER JOIN carrera_asignatura ca
+      ON r.carreraAsignaturaId = ca.id
+    INNER JOIN asignaturas a
+      ON ca.asignaturaId = a.id
+    WHERE rr.resultadoAprendizajeId IN (:raIds)
+    AND rr.estadoActivo = true
+    AND ca.carreraId = :carreraId
+    [AND rr.nivelAporte IN (:nivelesAporte)]
+    -- Filtro opcional por niveles
+  end note
+  DB --> Service: Lista de RaaRa con RAA, CarreraAsignatura y Asignatura
+  
+  Service -> Service: 5. Construir mapas de datos
+  note right
+    **Mapas creados:**
+    
+    1. oppMap: Map<oppId, OppModel>
+       - Para acceso rápido a OPP
+    
+    2. oppToRaMap: Map<oppId, Set<raId>>
+       - RAs relacionados con cada OPP
+    
+    3. raMap: Map<raId, ResultadoAprendizajeModel>
+       - Información de cada RA
+    
+    4. raToAsignaturasMap: 
+       Map<raId, Array<{asignatura, nivelAporte}>>
+       - Asignaturas relacionadas con cada RA
+       - Incluye nivel de aporte
+       - Evita duplicados
+  end note
+  
+  Service -> Service: 6. Construir respuesta estructurada
+  note right
+    Para cada OPP:
+      Obtener RAs relacionados (oppToRaMap)
+      
+      Para cada RA:
+        Obtener asignaturas (raToAsignaturasMap)
+        
+        Si tiene asignaturas (que cumplan filtro):
+          Agregar RA con sus asignaturas
+        
+      Agregar OPP con sus RAs
+      (incluir OPPs sin RAs para completitud)
+  end note
+  
+  Service --> Controller: OppRaAsignaturasResponseDto
+  note right
+    **Estructura de Respuesta:**
+    {
+      carreraId: number,
+      carreraNombre: string,
+      opps: [
+        {
+          opp: {
+            id: number,
+            codigo: string,
+            descripcion: string
+          },
+          resultadosAprendizaje: [
+            {
+              ra: {
+                id: number,
+                codigo: string,
+                descripcion: string
+              },
+              asignaturas: [
+                {
+                  id: number,
+                  codigo: string,
+                  nombre: string,
+                  nivelAporte: 'Alto' | 'Medio' | 'Bajo'
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  end note
+  
+  Controller --> API: 200 OK con datos
+  API --> Frontend: Respuesta JSON
+end
+
+== Uso en Frontend ==
+Frontend -> Frontend: Renderizar tabla de 3 columnas
+note right
+  **Visualización en Tabla:**
+  
+  ┌─────────────────────────────────────────────────┐
+  │  OPP  │  Resultados de Aprendizaje │ Asignaturas│
+  ├─────────────────────────────────────────────────┤
+  │ OPP1  │ RG1: Identifica...         │ IS-101     │
+  │ Desc..│                            │ (Alto)     │
+  │       │                            │            │
+  │       │                            │ MA-201     │
+  │       │                            │ (Medio)    │
+  │       ├────────────────────────────┼────────────┤
+  │       │ RG3: Modela sistemas...    │ IS-305     │
+  │       │                            │ (Alto)     │
+  ├───────┼────────────────────────────┼────────────┤
+  │ OPP2  │ RE1: Realiza invest...     │ IS-501     │
+  │ Desc..│                            │ (Alto)     │
+  └─────────────────────────────────────────────────┘
+  
+  **Lógica de renderizado:**
+  
+  opps.forEach(opp => {
+    // Primera fila: OPP con rowspan
+    let totalRows = opp.resultadosAprendizaje
+      .reduce((sum, ra) => 
+        sum + ra.asignaturas.length, 0)
+    
+    opp.resultadosAprendizaje.forEach(ra => {
+      ra.asignaturas.forEach(asig => {
+        // Renderizar fila con:
+        // - OPP (solo primera vez)
+        // - RA (solo primera vez por RA)
+        // - Asignatura + badge nivel
+      })
+    })
+  })
+end note
+
+Frontend -> Frontend: Aplicar estilos según nivel
+note right
+  **Badges por nivel de aporte:**
+  
+  - Alto: Badge rojo/naranja
+    background: #FF6B6B
+    
+  - Medio: Badge amarillo
+    background: #FFD93D
+    
+  - Bajo: Badge verde
+    background: #6BCF7F
+  
+  **Tooltip en hover:**
+  Mostrar descripción completa
+  de OPP, RA o Asignatura
+end note
+
+== Ejemplo de Filtrado ==
+
+Frontend -> Frontend: Usuario selecciona "Solo Alto"
+Frontend -> API: GET /reportes/opp-ra-asignaturas/8?nivelesAporte[]=Alto
+API -> Service: Filtrar por nivelAporte = 'Alto'
+Service -> DB: Query con WHERE nivelAporte = 'Alto'
+DB --> Service: Solo asignaturas con nivel Alto
+Service --> API: Respuesta filtrada
+API --> Frontend: Tabla actualizada
+
+note over Frontend
+  **Tabla después del filtro:**
+  Solo muestra asignaturas con nivel Alto
+  
+  OPPs sin asignaturas Alto aparecen
+  sin RAs en la segunda columna
+  
+  Útil para identificar gaps en
+  cobertura de alto impacto
+end note
+
+== Componentes Frontend Sugeridos ==
+
+note over Frontend
+  **Componente: OppRaAsignaturasTable**
+  
+  Props:
+  - carreraId: number
+  
+  State:
+  - data: OppRaAsignaturasResponse
+  - nivelesAporte: string[]
+  - loading: boolean
+  - expandedOpps: Set<number>
+  
+  Métodos:
+  - fetchData()
+  - toggleOppExpansion(oppId)
+  - handleFilterChange()
+  - exportToExcel()
+  
+  UI Elements:
+  - FilterBar (niveles de aporte)
+  - ExpandableTable
+    * OPP column (expandible)
+    * RA column (lista)
+    * Asignaturas column (chips)
+  - EmptyState
+  - LoadingSpinner
+end note
+
+note over Service
+  **Optimización de Query:**
+  
+  1. Single query con includes anidados
+     Alternativa a múltiples queries
+  
+  2. Eager loading de relaciones
+     Reduce N+1 queries
+  
+  3. Índices en:
+     - ra_opp (oppId, resultadoAprendizajeId)
+     - raa_ra (resultadoAprendizajeId, nivelAporte)
+     - carrera_asignatura (carreraId, asignaturaId)
+  
+  4. Caché opcional:
+     - Redis para datos estáticos
+     - TTL: 1 hora
+     - Invalidar al actualizar relaciones
+end note
+
+@enduml

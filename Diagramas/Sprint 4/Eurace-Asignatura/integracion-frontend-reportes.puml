@@ -1,0 +1,325 @@
+@startuml Integración Frontend - Reportes EUR-ACE
+!theme plain
+skinparam sequenceMessageAlign center
+
+title Integración Frontend: Sistema de Reportes EUR-ACE
+
+actor Usuario as User
+participant "Vista Matriz\n(Component)" as MatrizView
+participant "Vista Detalle\n(Modal/Page)" as DetalleView
+participant "Reportes Service\n(Frontend)" as FrontendService
+participant "Backend API\n/reportes" as BackendAPI
+
+== Caso de Uso 1: Visualizar Matriz General ==
+
+User -> MatrizView: Accede a reportes de carrera
+activate MatrizView
+
+MatrizView -> MatrizView: Inicializar estado
+note right
+  State inicial:
+  - carreraId: from route params
+  - nivelesAporte: []
+  - search: ""
+  - loading: true
+  - matrizData: null
+end note
+
+MatrizView -> FrontendService: getMatrizAsignaturasEurace(carreraId)
+activate FrontendService
+
+FrontendService -> BackendAPI: GET /reportes/matriz-asignaturas-eurace/:carreraId
+note right
+  Headers: { Authorization: Bearer <token> }
+end note
+activate BackendAPI
+
+BackendAPI --> FrontendService: 200 OK + MatrizData
+deactivate BackendAPI
+
+FrontendService --> MatrizView: MatrizData
+deactivate FrontendService
+
+MatrizView -> MatrizView: Renderizar tabla matriz
+note right
+  **Renderizado:**
+  
+  Tabla con:
+  - Filas: asignaturas (code, name)
+  - Columnas: eurAceCriteria (code)
+  
+  Cada celda (asignatura x eurAce):
+  - Buscar en mappings[]
+  - Si hasMapping:
+    * Badge con niveles de aporte
+    * Tooltip con cantidadRAAs
+    * Color según niveles
+  - Si no: celda vacía/gris
+end note
+
+MatrizView --> User: Mostrar matriz interactiva
+deactivate MatrizView
+
+== Caso de Uso 2: Filtrar por Búsqueda ==
+
+User -> MatrizView: Escribe "MATD" en búsqueda
+activate MatrizView
+
+MatrizView -> MatrizView: Actualizar state.search = "MATD"
+
+MatrizView -> FrontendService: getMatrizAsignaturasEurace(\n  carreraId,\n  nivelesAporte,\n  search="MATD"\n)
+activate FrontendService
+
+FrontendService -> BackendAPI: GET /reportes/matriz-asignaturas-eurace/:carreraId\n?search=MATD
+activate BackendAPI
+
+BackendAPI --> FrontendService: 200 OK + Matriz filtrada
+note right
+  Solo asignaturas con código
+  o nombre que contengan "MATD"
+  
+  Mappings solo para esas asignaturas
+end note
+deactivate BackendAPI
+
+FrontendService --> MatrizView: Matriz filtrada
+deactivate FrontendService
+
+MatrizView -> MatrizView: Re-renderizar con filtros
+MatrizView --> User: Matriz actualizada
+deactivate MatrizView
+
+== Caso de Uso 3: Filtrar por Niveles de Aporte ==
+
+User -> MatrizView: Selecciona filtros: [Alto, Medio]
+activate MatrizView
+
+MatrizView -> MatrizView: Actualizar state.nivelesAporte = ["Alto", "Medio"]
+
+MatrizView -> FrontendService: getMatrizAsignaturasEurace(\n  carreraId,\n  nivelesAporte=["Alto", "Medio"]\n)
+activate FrontendService
+
+FrontendService -> BackendAPI: GET /reportes/matriz-asignaturas-eurace/:carreraId\n?nivelesAporte[]=Alto&nivelesAporte[]=Medio
+activate BackendAPI
+
+BackendAPI --> FrontendService: 200 OK + Matriz filtrada
+note right
+  Solo muestra relaciones
+  con nivel Alto o Medio
+  
+  Excluye relaciones con
+  solo nivel Bajo
+end note
+deactivate BackendAPI
+
+FrontendService --> MatrizView: Matriz filtrada
+deactivate FrontendService
+
+MatrizView -> MatrizView: Re-renderizar
+note right
+  Celdas actualizadas:
+  - Solo badges Alto/Medio
+  - Celdas que solo tenían Bajo
+    ahora aparecen vacías
+end note
+
+MatrizView --> User: Matriz con filtros aplicados
+deactivate MatrizView
+
+== Caso de Uso 4: Ver Detalle de Trazabilidad ==
+
+User -> MatrizView: Click en celda con relación
+note right
+  Usuario hace click en celda
+  donde hasMapping = true
+  
+  Parámetros:
+  - asignaturaId: from celda
+  - eurAceId: from columna
+end note
+activate MatrizView
+
+MatrizView -> DetalleView: Abrir modal/página(\n  asignaturaId,\n  carreraId,\n  nivelesAporte?\n)
+activate DetalleView
+
+DetalleView -> FrontendService: getTrazabilidadAsignatura(\n  asignaturaId,\n  carreraId,\n  nivelesAporte\n)
+activate FrontendService
+
+FrontendService -> BackendAPI: GET /reportes/trazabilidad-asignatura/:asignaturaId\n?carreraId=8&nivelesAporte[]=Alto&nivelesAporte[]=Medio
+activate BackendAPI
+
+BackendAPI --> FrontendService: 200 OK + TrazabilidadData
+note right
+  Respuesta con trazabilidad
+  completa agrupada por niveles
+end note
+deactivate BackendAPI
+
+FrontendService --> DetalleView: TrazabilidadData
+deactivate FrontendService
+
+DetalleView -> DetalleView: Renderizar trazabilidad detallada
+note right
+  **Layout sugerido:**
+  
+  Header:
+  ┌────────────────────────────┐
+  │ Asignatura: MATD123        │
+  │ Cálculo en una Variable    │
+  └────────────────────────────┘
+  
+  Tabs por nivel:
+  [Alto: 5] [Medio: 3] [Bajo: 0]
+  
+  Lista de items (nivel Alto):
+  ┌──────────────────────────┐
+  │ RAA 1.2: Descripción...  │
+  │   ↓ Justificación...     │
+  │ RA1: Descripción...      │
+  │   ↓ Justificación...     │
+  │ EUR-ACE 5.2.1: Desc...   │
+  └──────────────────────────┘
+  
+  Botones:
+  [Exportar PDF] [Cerrar]
+end note
+
+DetalleView --> User: Mostrar detalle completo
+deactivate DetalleView
+deactivate MatrizView
+
+== Caso de Uso 5: Exportar Datos ==
+
+User -> MatrizView: Click en "Exportar"
+activate MatrizView
+
+MatrizView -> MatrizView: Generar Excel/PDF
+note right
+  Usar datos actuales en memoria
+  (matrizData) para exportar
+  
+  Incluir:
+  - Tabla completa
+  - Filtros aplicados
+  - Estadísticas
+  - Fecha de generación
+end note
+
+MatrizView --> User: Descargar archivo
+deactivate MatrizView
+
+== Componentes Frontend Sugeridos ==
+
+note over MatrizView
+  **Componente: MatrixTable**
+  
+  Props:
+  - carreraId: number
+  - initialFilters?: Filters
+  
+  State:
+  - matrizData: MatrizResponse
+  - nivelesAporte: string[]
+  - search: string
+  - loading: boolean
+  
+  Métodos:
+  - fetchMatriz()
+  - handleFilterChange()
+  - handleCellClick()
+  - exportToExcel()
+  
+  UI Elements:
+  - FilterBar (search, niveles)
+  - StatsCard (totales, cobertura)
+  - DataTable (matriz)
+  - LoadingSpinner
+end note
+
+note over DetalleView
+  **Componente: TrazabilidadModal**
+  
+  Props:
+  - asignaturaId: number
+  - carreraId: number
+  - nivelesAporte?: string[]
+  - onClose: () => void
+  
+  State:
+  - trazabilidadData: TrazabilidadResponse
+  - activeTab: 'Alto' | 'Medio' | 'Bajo'
+  - loading: boolean
+  
+  Métodos:
+  - fetchTrazabilidad()
+  - handleTabChange()
+  - exportToPDF()
+  
+  UI Elements:
+  - Header (asignatura info)
+  - Tabs (niveles)
+  - ItemList (RAA→RA→EUR-ACE)
+  - ActionButtons
+end note
+
+note over FrontendService
+  **Service: ReportesApiService**
+  
+  Métodos:
+  
+  async getMatrizAsignaturasEurace(
+    carreraId: number,
+    nivelesAporte?: string[],
+    search?: string
+  ): Promise<MatrizResponse>
+  
+  async getTrazabilidadAsignatura(
+    asignaturaId: number,
+    carreraId: number,
+    nivelesAporte?: string[]
+  ): Promise<TrazabilidadResponse>
+  
+  Maneja:
+  - Autenticación (JWT)
+  - Construcción de query params
+  - Error handling
+  - Loading states
+  - Caching (opcional)
+end note
+
+== Consideraciones de UX ==
+
+note over User, BackendAPI
+  **Best Practices:**
+  
+  1. **Loading States:**
+     - Skeleton loaders durante fetch
+     - Disable filtros mientras carga
+  
+  2. **Error Handling:**
+     - Toast/Alert para errores
+     - Retry button si falla
+     - Mensajes amigables
+  
+  3. **Performance:**
+     - Debounce en búsqueda (300ms)
+     - Virtualización si >100 filas
+     - Pagination opcional
+  
+  4. **Accesibilidad:**
+     - Keyboard navigation
+     - Screen reader labels
+     - Color + iconos para niveles
+  
+  5. **Responsive:**
+     - Mobile: lista colapsable
+     - Tablet: tabla scrollable
+     - Desktop: tabla completa
+  
+  6. **Caché:**
+     - Guardar última matriz en state
+     - Solo refetch si filtros cambian
+     - Invalidar al salir de página
+end note
+
+@enduml

@@ -1,0 +1,258 @@
+@startuml Trazabilidad Asignatura
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title Secuencia: Obtener Trazabilidad Detallada de una Asignatura
+
+actor "Usuario\n(Frontend)" as Frontend
+participant "API Gateway\n/reportes" as API
+participant "ReportesController" as Controller
+participant "JwtAuthGuard\nRolesGuard" as Guard
+participant "ReportesService" as Service
+database "PostgreSQL\nDatabase" as DB
+
+== Autenticación y Autorización ==
+Frontend -> API: GET /reportes/trazabilidad-asignatura/:asignaturaId\n?carreraId=8&nivelesAporte[]=Alto
+note right
+  **Headers:**
+  Authorization: Bearer <JWT_TOKEN>
+  
+  **Path Params:**
+  - asignaturaId: number
+  
+  **Query Params:**
+  - carreraId: number (requerido)
+  - nivelesAporte: string[] (opcional)
+    Valores: Alto, Medio, Bajo
+end note
+
+API -> Controller: getTrazabilidadAsignatura(asignaturaId, query)
+Controller -> Guard: Validar JWT y Roles
+note right
+  **Roles Autorizados:**
+  - CEI
+  - COORDINADOR
+  - DECANO
+  - SUBDECANO
+  - JEFE_DEPARTAMENTO
+  - ADMINISTRADOR
+end note
+
+alt Token inválido o sin permisos
+  Guard --> Controller: 401 Unauthorized / 403 Forbidden
+  Controller --> API: Error Response
+  API --> Frontend: 401 / 403
+else Token válido y rol autorizado
+  Guard --> Controller: Acceso permitido
+  
+  == Procesamiento de Datos ==
+  Controller -> Service: getTrazabilidadAsignatura(\n  asignaturaId,\n  carreraId,\n  nivelesAporte?\n)
+  
+  Service -> DB: 1. Verificar que existe la asignatura
+  note right
+    SELECT *
+    FROM asignaturas
+    WHERE id = :asignaturaId
+  end note
+  DB --> Service: Asignatura encontrada
+  
+  alt Asignatura no encontrada
+    Service --> Controller: NotFoundException
+    Controller --> API: 404 Not Found
+    API --> Frontend: Error: Asignatura no encontrada
+  end
+  
+  Service -> DB: 2. Verificar relación carrera-asignatura
+  note right
+    SELECT *
+    FROM carrera_asignatura
+    WHERE carreraId = :carreraId
+    AND asignaturaId = :asignaturaId
+  end note
+  DB --> Service: CarreraAsignatura encontrada
+  
+  alt Asignatura no pertenece a la carrera
+    Service --> Controller: NotFoundException
+    Controller --> API: 404 Not Found
+    API --> Frontend: Error: Asignatura no pertenece a carrera
+  end
+  
+  Service -> DB: 3. Obtener RAAs de la asignatura
+  note right
+    SELECT *
+    FROM raa
+    WHERE carreraAsignaturaId = :carreraAsignaturaId
+    AND estadoActivo = true
+    ORDER BY codigo ASC
+  end note
+  DB --> Service: Lista de RAAs
+  
+  alt Sin RAAs
+    Service --> Controller: Respuesta vacía por niveles
+    note right
+      {
+        asignatura: {...},
+        trazabilidad: {
+          Alto: [],
+          Medio: [],
+          Bajo: []
+        }
+      }
+    end note
+    Controller --> API: 200 OK (vacío)
+    API --> Frontend: Sin trazabilidad
+  end
+  
+  Service -> DB: 4. Obtener relaciones RAA → RA con nivel de aporte
+  note right
+    SELECT rr.*, ra.*
+    FROM raa_ra rr
+    INNER JOIN resultados_aprendizaje ra
+      ON rr.resultadoAprendizajeId = ra.id
+    WHERE rr.raaId IN (:raaIds)
+    AND rr.estadoActivo = true
+    [AND rr.nivelAporte IN (:nivelesAporte)]
+    -- Filtro opcional
+    ORDER BY rr.nivelAporte ASC
+  end note
+  DB --> Service: Lista de RaaRa con RAs incluidos
+  
+  alt Sin relaciones RAA-RA
+    Service --> Controller: Respuesta vacía por niveles
+    Controller --> API: 200 OK (vacío)
+    API --> Frontend: Sin trazabilidad
+  end
+  
+  Service -> DB: 5. Obtener relaciones RA → EUR-ACE
+  note right
+    SELECT re.*, ea.*
+    FROM ra_eurace re
+    INNER JOIN eur_ace ea
+      ON re.eurAceId = ea.id
+    WHERE re.resultadoAprendizajeId IN (:raIds)
+    AND re.estadoActivo = true
+  end note
+  DB --> Service: Lista de RaEurace con EUR-ACE
+  
+  alt Sin relaciones RA-EURACE
+    Service --> Controller: Respuesta vacía por niveles
+    Controller --> API: 200 OK (vacío)
+    API --> Frontend: Sin trazabilidad
+  end
+  
+  Service -> Service: 6. Construir mapas de datos
+  note right
+    - raaMap: Map<raaId, RaaModel>
+    - raMap: Map<raId, ResultadoAprendizajeModel>
+    - raEuraceMap: Map<raId, RaEuraceModel[]>
+  end note
+  
+  Service -> Service: 7. Construir items de trazabilidad
+  note right
+    Para cada RaaRa:
+      Para cada RaEurace del RA:
+        Crear TrazabilidadItemDto {
+          raa: { id, codigo, descripcion },
+          ra: { id, codigo, descripcion },
+          justificacionRaaRa: string,
+          eurAce: { id, codigo, descripcion },
+          justificacionRaEurace: string
+        }
+  end note
+  
+  Service -> Service: 8. Agrupar por nivel de aporte
+  note right
+    Agrupar los items en:
+    {
+      Alto: TrazabilidadItemDto[],
+      Medio: TrazabilidadItemDto[],
+      Bajo: TrazabilidadItemDto[]
+    }
+    
+    Cada item se agrupa según el
+    nivelAporte de la relación RaaRa
+  end note
+  
+  Service --> Controller: TrazabilidadAsignaturaResponseDto
+  note right
+    **Estructura de Respuesta:**
+    {
+      asignatura: {
+        id: number,
+        codigo: string,
+        nombre: string
+      },
+      trazabilidad: {
+        Alto: [
+          {
+            raa: { id, codigo, descripcion },
+            ra: { id, codigo, descripcion },
+            justificacionRaaRa: string,
+            eurAce: { id, codigo, descripcion },
+            justificacionRaEurace: string
+          },
+          ...
+        ],
+        Medio: [...],
+        Bajo: [...]
+      }
+    }
+  end note
+  
+  Controller --> API: 200 OK con trazabilidad
+  API --> Frontend: Respuesta JSON
+end
+
+== Uso en Frontend ==
+Frontend -> Frontend: Renderizar trazabilidad detallada
+note right
+  **Visualización sugerida:**
+  
+  1. Header con información de asignatura:
+     - Código y nombre
+  
+  2. Tabs o secciones por nivel de aporte:
+     - Alto (badge rojo/naranja)
+     - Medio (badge amarillo)
+     - Bajo (badge verde)
+  
+  3. Cada item mostrar:
+     ┌─────────────────────────────┐
+     │ RAA: Código - Descripción   │
+     │   ↓ Justificación           │
+     │ RA: Código - Descripción    │
+     │   ↓ Justificación           │
+     │ EUR-ACE: Código - Desc.     │
+     └─────────────────────────────┘
+  
+  4. Filtros:
+     - Por nivel de aporte
+     - Búsqueda en descripciones
+  
+  5. Opciones de exportación:
+     - PDF, Excel
+end note
+
+== Caso de Uso Típico ==
+note over Frontend, DB
+  **Flujo de navegación:**
+  
+  1. Usuario está en vista de Matriz
+     (matriz-asignaturas-eurace)
+  
+  2. Click en una celda de la matriz
+     que tiene relación (hasMapping=true)
+  
+  3. Abrir modal/página con detalles
+     llamando a trazabilidad-asignatura
+  
+  4. Mostrar cadena completa:
+     Asignatura → RAA → RA → EUR-ACE
+     con justificaciones
+  
+  5. Usuario puede exportar o navegar
+     a otras asignaturas
+end note
+
+@enduml
