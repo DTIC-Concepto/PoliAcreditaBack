@@ -1,8 +1,9 @@
-import { Injectable, ConflictException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, ConflictException, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Op } from 'sequelize';
 import { EurAceModel } from './models/eur-ace.model';
 import { CreateEurAceDto } from './dto/create-eur-ace.dto';
+import { UpdateEurAceDto } from './dto/update-eur-ace.dto';
 import { FilterEurAceDto } from './dto/filter-eur-ace.dto';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { EventoTipoEnum } from '../auditoria/enums/evento-tipo.enum';
@@ -139,5 +140,99 @@ export class EurAceService {
     return this.eurAceModel.findOne({
       where: { id },
     });
+  }
+
+  async update(
+    id: number,
+    updateEurAceDto: UpdateEurAceDto,
+    usuarioId?: number,
+  ): Promise<EurAceModel> {
+    try {
+      const criterio = await this.eurAceModel.findByPk(id);
+
+      if (!criterio) {
+        throw new NotFoundException('Criterio EUR-ACE no encontrado');
+      }
+
+      // Validar unicidad de código si se actualiza
+      const nextCodigo = updateEurAceDto.codigo ?? criterio.codigo;
+
+      if (nextCodigo !== criterio.codigo) {
+        const existingCriterio = await this.eurAceModel.findOne({
+          where: {
+            codigo: nextCodigo,
+            id: { [Op.ne]: id },
+          },
+        });
+
+        if (existingCriterio) {
+          throw new ConflictException(
+            `Ya existe un criterio EUR-ACE con el código "${nextCodigo}"`,
+          );
+        }
+      }
+
+      await criterio.update(updateEurAceDto as any);
+
+      // Registrar en auditoría
+      if (usuarioId) {
+        await this.auditoriaService.registrarEvento({
+          usuarioId,
+          tipoEvento: EventoTipoEnum.CRITERIO_EUR_ACE_ACTUALIZADO,
+          descripcion: `Se actualizó el criterio EUR-ACE con código "${criterio.codigo}"`,
+          entidad: 'eur_ace_criteria',
+          entidadId: criterio.id,
+          metadatos: {
+            codigo: criterio.codigo,
+            descripcion: criterio.descripcion,
+          },
+        });
+      }
+
+      return criterio;
+    } catch (error) {
+      if (error instanceof ConflictException || error instanceof NotFoundException) {
+        throw error;
+      }
+
+      throw new InternalServerErrorException(
+        'Error interno del servidor al actualizar el criterio EUR-ACE',
+      );
+    }
+  }
+
+  async remove(id: number, usuarioId?: number): Promise<void> {
+    try {
+      const criterio = await this.eurAceModel.findByPk(id);
+
+      if (!criterio) {
+        throw new NotFoundException('Criterio EUR-ACE no encontrado');
+      }
+
+      await criterio.destroy();
+
+      // Registrar en auditoría
+      if (usuarioId) {
+        await this.auditoriaService.registrarEvento({
+          usuarioId,
+          tipoEvento: EventoTipoEnum.CRITERIO_EUR_ACE_ELIMINADO,
+          descripcion: `Se eliminó el criterio EUR-ACE con código "${criterio.codigo}"`,
+          entidad: 'eur_ace_criteria',
+          entidadId: criterio.id,
+          metadatos: {
+            codigo: criterio.codigo,
+            descripcion: criterio.descripcion,
+          },
+        });
+      }
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+
+      throw new InternalServerErrorException(
+        'Error interno del servidor al eliminar el criterio EUR-ACE',
+      );
+    }
   }
 }

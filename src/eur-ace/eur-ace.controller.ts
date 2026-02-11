@@ -7,6 +7,10 @@ import {
   HttpStatus,
   Get,
   Query,
+  Patch,
+  Delete,
+  Param,
+  ParseIntPipe,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -16,7 +20,10 @@ import {
   ApiBadRequestResponse,
   ApiConflictResponse,
   ApiInternalServerErrorResponse,
+  ApiParam,
+  ApiNotFoundResponse,
 } from '@nestjs/swagger';
+import { UpdateEurAceDto } from './dto/update-eur-ace.dto';
 import { EurAceService } from './eur-ace.service';
 import { CreateEurAceDto } from './dto/create-eur-ace.dto';
 import { EurAceResponseDto } from './dto/eur-ace-response.dto';
@@ -166,5 +173,74 @@ export class EurAceController {
       hasPrevious: result.hasPrevious,
       hasNext: result.hasNext,
     };
+  }
+
+  @Patch(':id')
+  @Roles(RolEnum.CEI)
+  @ApiOperation({
+    summary: 'Actualizar criterio EUR-ACE',
+    description: 'Actualiza los datos de un criterio EUR-ACE existente.',
+  })
+  @ApiParam({
+    name: 'id',
+    type: 'number',
+    description: 'ID del criterio EUR-ACE a actualizar',
+    example: 1,
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Criterio EUR-ACE actualizado exitosamente',
+    type: EurAceResponseDto,
+  })
+  @ApiBadRequestResponse({
+    description: 'Datos de entrada inválidos',
+  })
+  @ApiNotFoundResponse({
+    description: 'Criterio EUR-ACE no encontrado',
+  })
+  @ApiConflictResponse({
+    description: 'Código duplicado',
+  })
+  async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateEurAceDto: UpdateEurAceDto,
+    @GetUser() user: UsuarioModel,
+  ): Promise<EurAceResponseDto> {
+    const criterio = await this.eurAceService.update(id, updateEurAceDto, user.id);
+
+    return {
+      id: criterio.id,
+      codigo: criterio.codigo,
+      descripcion: criterio.descripcion,
+      createdAt: criterio.createdAt,
+      updatedAt: criterio.updatedAt,
+    };
+  }
+
+  @Delete(':id')
+  @Roles(RolEnum.CEI)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Eliminar criterio EUR-ACE',
+    description: 'Elimina un criterio EUR-ACE del sistema.',
+  })
+  @ApiParam({
+    name: 'id',
+    type: 'number',
+    description: 'ID del criterio EUR-ACE a eliminar',
+    example: 1,
+  })
+  @ApiResponse({
+    status: HttpStatus.NO_CONTENT,
+    description: 'Criterio EUR-ACE eliminado exitosamente',
+  })
+  @ApiNotFoundResponse({
+    description: 'Criterio EUR-ACE no encontrado',
+  })
+  async remove(
+    @Param('id', ParseIntPipe) id: number,
+    @GetUser() user: UsuarioModel,
+  ): Promise<void> {
+    return this.eurAceService.remove(id, user.id);
   }
 }

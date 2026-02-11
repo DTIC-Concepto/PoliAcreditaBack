@@ -1,7 +1,8 @@
-import { Controller, Post, Get, Body, Query, UseGuards, Req } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags, ApiOperation, ApiResponse, ApiBody, ApiQuery } from '@nestjs/swagger';
+import { Controller, Post, Get, Body, Query, UseGuards, Req, Patch, Delete, Param, ParseIntPipe, HttpCode, HttpStatus } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags, ApiOperation, ApiResponse, ApiBody, ApiQuery, ApiParam, ApiBadRequestResponse, ApiNotFoundResponse, ApiConflictResponse } from '@nestjs/swagger';
 import { OppService } from './opp.service';
 import { CreateOppDto } from './dto/create-opp.dto';
+import { UpdateOppDto } from './dto/update-opp.dto';
 import { FilterOppDto } from './dto/filter-opp.dto';
 import { OppResponseDto } from './dto/opp-response.dto';
 import { OppPaginatedResponseDto } from './dto/opp-paginated-response.dto';
@@ -263,5 +264,77 @@ export class OppController {
       createdAt: opp.createdAt,
       updatedAt: opp.updatedAt,
     };
+  }
+
+  @Patch(':id')
+  @Roles(RolEnum.COORDINADOR, RolEnum.CEI)
+  @ApiOperation({
+    summary: 'Actualizar Objetivo de Programa',
+    description: 'Actualiza los datos de un Objetivo de Programa existente.',
+  })
+  @ApiParam({
+    name: 'id',
+    type: 'number',
+    description: 'ID del Objetivo de Programa a actualizar',
+    example: 1,
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Objetivo de Programa actualizado exitosamente',
+    type: OppResponseDto,
+  })
+  @ApiBadRequestResponse({
+    description: 'Datos de entrada inválidos',
+  })
+  @ApiNotFoundResponse({
+    description: 'Objetivo de Programa no encontrado',
+  })
+  @ApiConflictResponse({
+    description: 'Código duplicado para la carrera',
+  })
+  async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateOppDto: UpdateOppDto,
+    @Req() req: Request,
+  ): Promise<OppResponseDto> {
+    const usuarioId = (req.user as any).id;
+    const opp = await this.oppService.update(id, updateOppDto, usuarioId);
+
+    return {
+      id: opp.id,
+      codigo: opp.codigo,
+      descripcion: opp.descripcion,
+      carreraId: opp.carreraId,
+      createdAt: opp.createdAt,
+      updatedAt: opp.updatedAt,
+    };
+  }
+
+  @Delete(':id')
+  @Roles(RolEnum.COORDINADOR, RolEnum.CEI)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Eliminar Objetivo de Programa',
+    description: 'Elimina un Objetivo de Programa del sistema.',
+  })
+  @ApiParam({
+    name: 'id',
+    type: 'number',
+    description: 'ID del Objetivo de Programa a eliminar',
+    example: 1,
+  })
+  @ApiResponse({
+    status: HttpStatus.NO_CONTENT,
+    description: 'Objetivo de Programa eliminado exitosamente',
+  })
+  @ApiNotFoundResponse({
+    description: 'Objetivo de Programa no encontrado',
+  })
+  async remove(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: Request,
+  ): Promise<void> {
+    const usuarioId = (req.user as any).id;
+    return this.oppService.remove(id, usuarioId);
   }
 }
